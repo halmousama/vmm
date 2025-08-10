@@ -1,0 +1,449 @@
+#!/bin/bash
+
+# --- الإعدادات الأساسية والمسارات ---
+VMM_DIR="$HOME/.vmm"
+ISO_DIR="${VMM_DIR}/iso"
+IMAGES_DIR="${VMM_DIR}/images"
+CONFIGS_DIR="${VMM_DIR}/configs"
+
+# --- التحقق من وجود مجلدات الـ VMM ---
+if [ ! -d "$VMM_DIR" ]; then
+    mkdir -p "$VMM_DIR"
+fi
+
+if [ ! -d "$ISO_DIR" ]; then
+    mkdir -p "$ISO_DIR"
+fi
+
+if [ ! -d "$IMAGES_DIR" ]; then
+    mkdir -p "$IMAGES_DIR"
+fi
+
+if [ ! -d "$CONFIGS_DIR" ]; then
+    mkdir -p "$CONFIGS_DIR"
+fi
+
+# --- دالة لعرض رسائل المساعدة ---
+help() {
+    local topic=$1
+
+    case "$topic" in
+        iso)
+            echo "Manages the ISO image library."
+            echo
+            echo "Usage: $(basename $0) iso <action> [arguments]"
+            echo
+            echo "Actions:"
+            echo "  list"
+            echo "      Lists all available ISO images in the library."
+            echo "      Example: $(basename $0) iso list"
+            echo
+            echo "  add /path/to/file.iso"
+            echo "      Securely moves an ISO file into the library."
+            echo "      Example: $(basename $0) iso add ~/Downloads/ubuntu-24.04.iso"
+            echo
+            echo "  find"
+            echo "      Searches your system for .iso files and presents a menu to add them."
+            echo "      Example: $(basename $0) iso find"
+            echo
+            echo "  remove"
+            echo "      Interactively select an ISO to permanently remove from the library."
+            echo "      Example: $(basename $0) iso remove"
+            ;;
+        vm)
+            echo "Manages virtual machines (configs and disk images)."
+            echo
+            echo "Usage: $(basename $0) vm <action> [vm_name]"
+            echo
+            echo "Actions:"
+            echo "  list"
+            echo "      Lists all configured virtual machines."
+            echo "      Example: $(basename $0) vm list"
+            echo
+            echo "  create"
+            echo "      Starts an interactive wizard to create a new VM."
+            echo "      Example: $(basename $0) vm create"
+            echo
+            echo "  run [vm_name]"
+            echo "      Runs a VM. If name is omitted, a selection menu appears."
+            echo "      Example: $(basename $0) vm run ubuntu-desktop"
+            echo
+            echo "  install [vm_name]"
+            echo "      Runs a VM in installation mode (boots from ISO)."
+            echo "      Example: $(basename $0) vm install ubuntu-desktop"
+            echo
+            echo "  edit [vm_name]"
+            echo "      Opens the configuration file for a VM in a text editor."
+            echo "      Example: $(basename $0) vm edit ubuntu-desktop"
+            echo
+            echo "  delete [vm_name]"
+            echo "      Permanently deletes a VM and its associated disk image."
+            echo "      Example: $(basename $0) vm delete ubuntu-desktop"
+            ;;
+        *)
+            # المساعدة العامة
+            echo "vmm-bin: A simple command-line manager for QEMU/KVM virtual machines."
+            echo
+            echo "Usage: $(basename $0) <module> <action> [arguments]"
+            echo "       $(basename $0) help [module]"
+            echo
+            echo "Available Modules:"
+            echo "  iso       Manage the ISO image library."
+            echo "  vm        Manage virtual machines."
+            echo
+            echo "Run 'vmm-bin help <module>' for more information on a specific module."
+            ;;
+    esac
+}
+
+# --- الوحدة الرئيسية: معالج الأوامر ---
+MODULE=$1
+ACTION=$2
+
+# التحقق من طلب المساعدة أولاً
+if [[ "$MODULE" == "help" || "$MODULE" == "--help" || "$MODULE" == "-h" ]]; then
+    help "$ACTION" # مرر الموضوع (iso, vm) إلى دالة المساعدة
+    exit 0
+fi
+
+# التأكد من أن المستخدم أدخل وحدة للعمل عليها
+if [ -z "$MODULE" ]; then
+    help # اعرض المساعدة العامة إذا لم يتم إدخال شيء
+    exit 1
+fi
+
+# --- معالجة وحدات العمل ---
+case "$MODULE" in
+    iso)
+        # --- معالجة الأوامر الخاصة بوحدة ISO ---
+        case "$ACTION" in
+            list)
+                echo "Available ISOs in library:"
+                ls -lH "$ISO_DIR"
+                ;;
+
+            add)
+                SOURCE_PATH=$3
+                if [ -z "$SOURCE_PATH" ]; then
+                    echo "Error: Please provide the path to the ISO file."
+                    echo "Usage: $(basename $0) iso add /path/to/your/file.iso"
+                    exit 1
+                fi
+                
+                if [ ! -f "$SOURCE_PATH" ]; then
+                    echo "Error: Source file not found at ${SOURCE_PATH}"
+                    exit 1
+                fi
+
+                DEST_PATH="${ISO_DIR}/$(basename "$SOURCE_PATH")"
+
+                # --- Check if file already exists ---
+                if [ -f "$DEST_PATH" ]; then
+                    echo "Error: An ISO with the name '$(basename "$SOURCE_PATH")' already exists in the library."
+                    echo "Please remove the existing one first or rename the source file."
+                    exit 1
+                fi
+
+                echo "Copying ${SOURCE_PATH}..."
+                cp "$SOURCE_PATH" "$DEST_PATH"
+
+                if [ $? -ne 0 ]; then
+                    echo "Error: Failed to copy file. Aborting."
+                    rm -f "$DEST_PATH" 
+                    exit 1
+                fi
+
+                echo "Verifying file integrity..."
+                original_checksum=$(sha256sum "$SOURCE_PATH" | awk '{print $1}')
+                copied_checksum=$(sha256sum "$DEST_PATH" | awk '{print $1}')
+
+                if [ "$original_checksum" == "$copied_checksum" ]; then
+                    echo "Verification successful. Removing original file."
+                    rm -f "$SOURCE_PATH"
+                    echo "File moved successfully to library: ${DEST_PATH}"
+                else
+                    echo "Error: Checksum mismatch! The copied file is corrupted."
+                    echo "The original file has been kept safe at ${SOURCE_PATH}."
+                    rm -f "$DEST_PATH"
+                    exit 1
+                fi
+                ;;
+
+            find)
+                echo "Searching for .iso files on your system... (this may take a while)"
+                # ملاحظة: 2>/dev/null لإخفاء أخطاء "Permission denied"
+                iso_to_add=$(find / -name "*.iso" 2>/dev/null | fzf --prompt="Select an ISO to add to the library > ")
+
+                if [ -n "$iso_to_add" ]; then
+                    # استدعاء الأمر 'add' الذي قمنا ببنائه بالفعل!
+                    # نستخدم $0 لاستدعاء السكربت نفسه
+                    "$0" iso add "$iso_to_add"
+                else
+                    echo "No file selected."
+                fi
+                ;;
+
+            remove)
+                echo "--- ISO Removal Tool ---"
+                echo "Select an ISO to remove from the library using the arrow keys and Enter."
+                iso_to_remove=$(ls -1 "$ISO_DIR" | fzf --prompt="SELECT ISO TO REMOVE > " --height=20%)
+
+                if [ -n "$iso_to_remove" ]; then
+                    echo
+                    echo "You are about to PERMANENTLY DELETE the following file:"
+                    echo "  -> ${iso_to_remove}"
+                    echo
+                    # جعل رسالة التأكيد أكثر وضوحاً
+                    read -p "To confirm, please type the full filename or 'no' to cancel: " confirmation
+
+                    if [ "$confirmation" == "$iso_to_remove" ]; then
+                        echo "Confirmation matched. Removing ${iso_to_remove}..."
+                        rm -f "${ISO_DIR}/${iso_to_remove}"
+                        echo "File removed successfully."
+                    else
+                        echo "Confirmation did not match. Removal cancelled."
+                    fi
+                else
+                    echo "No file selected. Removal cancelled."
+                fi
+                ;;
+
+            *)
+                echo "Unknown action for 'iso' module."
+                # استدعاء المساعدة الخاصة بوحدة iso
+                help iso
+                ;;
+        esac
+        ;;
+
+    vm)
+        # --- دالة لتشغيل الجهاز الوهمي بناءً على ملف الإعدادات ---
+        run_vm() {
+            local config_file="$1"
+            local install_mode="$2" # "yes" if in install mode
+
+            if [ ! -f "$config_file" ]; then
+                echo "Error: Config file not found at ${config_file}"
+                return 1
+            fi
+
+            echo "--- Reading config from: ${config_file} ---"
+
+            # قراءة المتغيرات من ملف الإعدادات
+            # وتحويل المسارات التي تبدأ بـ ~
+            while IFS='=' read -r key value; do
+                [[ "$key" =~ ^\s*# || -z "$key" ]] && continue
+                value=$(eval echo "$value") # لتوسيع ~
+                declare "$key"="$value"
+            done < "$config_file"
+
+            # --- بناء أمر QEMU ---
+            QEMU_CMD="qemu-system-x86_64"
+
+            # الإعدادات الأساسية
+            QEMU_CMD+=" -m ${ram:-2G}"
+            QEMU_CMD+=" -smp ${cpu_cores:-2}"
+            QEMU_CMD+=" -hda ${disk_image}"
+            
+            # تفعيل KVM (مهم جداً للأداء)
+            if [ "${enable_kvm:-true}" == "true" ]; then
+                QEMU_CMD+=" -enable-kvm -cpu ${cpu_model:-host}"
+            fi
+
+            # وضع التثبيت
+            if [ "$install_mode" == "yes" ]; then
+                echo "--- Starting in INSTALL mode ---"
+                QEMU_CMD+=" -cdrom ${iso_file} -boot d"
+            else
+                QEMU_CMD+=" -boot c"
+            fi
+            
+            # الإعدادات المتقدمة (إذا كانت مفعلة في ملف الإعدادات)
+            [ ! -z "$vga_card" ] && QEMU_CMD+=" -vga $vga_card"
+            [ "${display_gl:-false}" == "true" ] && QEMU_CMD+=" -display gtk,gl=on"
+            [ ! -z "$sound_hw" ] && QEMU_CMD+=" -soundhw $sound_hw"
+            [ "${usb_tablet:-true}" == "true" ] && QEMU_CMD+=" -device usb-ehci -device usb-tablet"
+            if [ "${network_mode:-user}" == "user" ]; then
+                QEMU_CMD+=" -net nic,model=${nic_model:-virtio-net-pci} -net user"
+            fi
+            
+            echo "--- Executing QEMU Command ---"
+            echo "$QEMU_CMD"
+            echo "---------------------------------"
+            
+            # تنفيذ الأمر
+            eval "$QEMU_CMD"
+        }
+
+
+        # --- معالجة الأوامر الخاصة بوحدة VM ---
+        case "$ACTION" in
+            list)
+                echo "--- Available Virtual Machines ---"
+                # يعرض أسماء الملفات في مجلد configs بدون امتداد .conf
+                ls "${CONFIGS_DIR}" | sed 's/\.conf$//'
+                ;;
+
+            create)
+                echo "--- New Virtual Machine Creator ---"
+                
+                # سؤال عن اسم الـ VM
+                read -p "Enter a name for your new VM (e.g., ubuntu-desktop): " vm_name
+                if [ -z "$vm_name" ]; then
+                    echo "Error: VM name cannot be empty."
+                    exit 1
+                fi
+
+                # --- Check if VM already exists ---
+                if [ -f "${CONFIGS_DIR}/${vm_name}.conf" ]; then
+                    echo "Error: A VM with the name '${vm_name}' already exists."
+                    echo "Please choose a different name."
+                    exit 1
+                fi
+
+                # سؤال عن حجم القرص
+                read -p "Enter disk size (e.g., 50G): " disk_size
+                disk_size=${disk_size:-50G} # قيمة افتراضية
+
+                # سؤال عن الرام
+                read -p "Enter RAM size (e.g., 4G): " ram_size
+                ram_size=${ram_size:-4G} # قيمة افتراضية
+
+                # سؤال عن عدد الأنوية
+                read -p "Enter CPU cores (e.g., 4): " cpu_cores
+                cpu_cores=${cpu_cores:-4} # قيمة افتراضية
+
+                # اختيار ملف الـ ISO
+                echo "Please select an ISO from your library for installation:"
+                iso_file_name=$(ls "$ISO_DIR" | fzf)
+                if [ -z "$iso_file_name" ]; then
+                    echo "No ISO selected. Aborting."
+                    exit 1
+                fi
+                
+                # --- إنشاء الملفات ---
+                VM_CONF_PATH="${CONFIGS_DIR}/${vm_name}.conf"
+                VM_DISK_PATH="${IMAGES_DIR}/${vm_name}.qcow2"
+                ISO_FULL_PATH="${ISO_DIR}/${iso_file_name}"
+                
+                echo "Creating disk image at ${VM_DISK_PATH}..."
+                qemu-img create -f qcow2 "$VM_DISK_PATH" "$disk_size"
+
+                echo "Creating configuration file at ${VM_CONF_PATH}..."
+                cat > "$VM_CONF_PATH" << EOL
+# --- VM Configuration for ${vm_name} ---
+# Generated by vmm-bin on $(date)
+
+# --- Basic Settings (Required) ---
+ram=${ram_size}
+cpu_cores=${cpu_cores}
+disk_image=${VM_DISK_PATH}
+iso_file=${ISO_FULL_PATH}
+
+# --- Advanced Settings (Uncomment to enable) ---
+#cpu_model=host
+#enable_kvm=true
+#vga_card=virtio
+#display_gl=true
+#network_mode=user
+#nic_model=virtio-net-pci
+#sound_hw=hda
+#usb_tablet=true
+EOL
+                
+                echo "--- VM '${vm_name}' created successfully! ---"
+                echo "To edit advanced settings, run: $(basename $0) vm edit ${vm_name}"
+                echo "To start installation, run: $(basename $0) vm install ${vm_name}"
+                ;;
+
+            run | install)
+                vm_name=$3
+                if [ -z "$vm_name" ]; then
+                    # الوضع التفاعلي
+                    vm_name=$(ls "${CONFIGS_DIR}" | sed 's/\.conf$//' | fzf --prompt="Select VM > ")
+                fi
+
+                if [ -z "$vm_name" ]; then
+                    echo "No VM selected. Aborting."
+                    exit 1
+                fi
+                
+                config_path="${CONFIGS_DIR}/${vm_name}.conf"
+                
+                install_flag="no"
+                if [ "$ACTION" == "install" ]; then
+                    install_flag="yes"
+                fi
+                
+                run_vm "$config_path" "$install_flag"
+                ;;
+                
+            edit)
+                vm_name=$3
+                if [ -z "$vm_name" ]; then
+                    vm_name=$(ls "${CONFIGS_DIR}" | sed 's/\.conf$//' | fzf --prompt="Select VM to edit > ")
+                fi
+                
+                if [ -n "$vm_name" ]; then
+                    nano "${CONFIGS_DIR}/${vm_name}.conf"
+                else
+                    echo "No VM selected."
+                fi
+                ;;
+            
+            delete)
+                echo "--- VM Deletion Tool ---"
+                vm_name=$3
+                if [ -z "$vm_name" ]; then
+                    vm_name=$(ls "${CONFIGS_DIR}" | sed 's/\.conf$//' | fzf --prompt="Select VM to DELETE > ")
+                fi
+
+                if [ -z "$vm_name" ]; then
+                    echo "No VM selected. Deletion cancelled."
+                    exit 1
+                fi
+
+                config_file="${CONFIGS_DIR}/${vm_name}.conf"
+                disk_image="${IMAGES_DIR}/${vm_name}.qcow2"
+
+                if [ ! -f "$config_file" ]; then
+                    echo "Error: VM '${vm_name}' does not exist."
+                    exit 1
+                fi
+
+                echo
+                echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                echo "!!!            W A R N I N G               !!!"
+                echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                echo "You are about to PERMANENTLY DELETE the VM '${vm_name}'."
+                echo "This will delete the following files:"
+                echo "  - Config: ${config_file}"
+                [ -f "$disk_image" ] && echo "  - Disk:   ${disk_image}"
+                echo "This action is IRREVERSIBLE."
+                echo
+
+                read -p "To confirm, please type the VM name '${vm_name}': " confirmation
+
+                if [ "$confirmation" == "$vm_name" ]; then
+                    echo "Confirmation matched. Deleting VM..."
+                    rm -f "$config_file"
+                    [ -f "$disk_image" ] && rm -f "$disk_image"
+                    echo "VM '${vm_name}' has been deleted."
+                else
+                    echo "Confirmation did not match. Deletion cancelled."
+                fi
+                ;;
+
+            *)
+                echo "Unknown action for 'vm' module."
+                echo "Available actions: create, run, install, edit, delete"
+                ;;
+        esac
+    ;;
+    
+    *)
+        echo "Unknown module: $MODULE"
+        help
+        exit 1
+        ;;
+esac
