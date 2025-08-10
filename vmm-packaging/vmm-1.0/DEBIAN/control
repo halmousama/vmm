@@ -1,0 +1,9 @@
+Package: vmm
+Version: 1.0
+Architecture: all
+Maintainer: Ousama Halmous <halmousousama@gmail.com>
+Depends: qemu-system-x86, fzf, libvirt-daemon-system
+Description: A simple command-line manager for QEMU/KVM.
+ vmm-bin is a powerful and interactive tool for managing the full lifecycle
+ of virtual machines directly from the terminal. It uses fzf for
+ interactive menus and a clean, self-contained directory structure.
