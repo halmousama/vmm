@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# --- الإعدادات الأساسية والمسارات ---
+# --- Basic Settings and Paths ---
 VMM_DIR="$HOME/.vmm"
 ISO_DIR="${VMM_DIR}/iso"
 IMAGES_DIR="${VMM_DIR}/images"
 CONFIGS_DIR="${VMM_DIR}/configs"
 
-# --- التحقق من وجود مجلدات الـ VMM ---
+# --- Verify VMM Directories Exist ---
 if [ ! -d "$VMM_DIR" ]; then
     mkdir -p "$VMM_DIR"
 fi
@@ -23,7 +23,7 @@ if [ ! -d "$CONFIGS_DIR" ]; then
     mkdir -p "$CONFIGS_DIR"
 fi
 
-# --- دالة لعرض رسائل المساعدة ---
+# --- Function to display help messages ---
 help() {
     local topic=$1
 
@@ -81,7 +81,7 @@ help() {
             echo "      Example: $(basename $0) vm delete ubuntu-desktop"
             ;;
         *)
-            # المساعدة العامة
+            # General help
             echo "vmm-bin: A simple command-line manager for QEMU/KVM virtual machines."
             echo
             echo "Usage: $(basename $0) <module> <action> [arguments]"
@@ -96,26 +96,26 @@ help() {
     esac
 }
 
-# --- الوحدة الرئيسية: معالج الأوامر ---
+# --- Main Module: Command Processor ---
 MODULE=$1
 ACTION=$2
 
-# التحقق من طلب المساعدة أولاً
+# Check for help request first
 if [[ "$MODULE" == "help" || "$MODULE" == "--help" || "$MODULE" == "-h" ]]; then
-    help "$ACTION" # مرر الموضوع (iso, vm) إلى دالة المساعدة
+    help "$ACTION" # Pass the topic (iso, vm) to the help function
     exit 0
 fi
 
-# التأكد من أن المستخدم أدخل وحدة للعمل عليها
+# Make sure the user entered a module to work with
 if [ -z "$MODULE" ]; then
-    help # اعرض المساعدة العامة إذا لم يتم إدخال شيء
+    help # Show general help if nothing was entered
     exit 1
 fi
 
-# --- معالجة وحدات العمل ---
+# --- Process Modules ---
 case "$MODULE" in
     iso)
-        # --- معالجة الأوامر الخاصة بوحدة ISO ---
+        # --- Process ISO Module Commands ---
         case "$ACTION" in
             list)
                 echo "Available ISOs in library:"
@@ -171,12 +171,12 @@ case "$MODULE" in
 
             find)
                 echo "Searching for .iso files on your system... (this may take a while)"
-                # ملاحظة: 2>/dev/null لإخفاء أخطاء "Permission denied"
+                # Note: 2>/dev/null to hide "Permission denied" errors
                 iso_to_add=$(find / -name "*.iso" 2>/dev/null | fzf --prompt="Select an ISO to add to the library > ")
 
                 if [ -n "$iso_to_add" ]; then
-                    # استدعاء الأمر 'add' الذي قمنا ببنائه بالفعل!
-                    # نستخدم $0 لاستدعاء السكربت نفسه
+                    # Call the 'add' command we already built!
+                    # We use $0 to call the script itself
                     "$0" iso add "$iso_to_add"
                 else
                     echo "No file selected."
@@ -193,7 +193,7 @@ case "$MODULE" in
                     echo "You are about to PERMANENTLY DELETE the following file:"
                     echo "  -> ${iso_to_remove}"
                     echo
-                    # جعل رسالة التأكيد أكثر وضوحاً
+                    # Make the confirmation message clearer
                     read -p "To confirm, please type the full filename or 'no' to cancel: " confirmation
 
                     if [ "$confirmation" == "$iso_to_remove" ]; then

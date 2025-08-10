@@ -34,6 +34,16 @@ sudo adduser $USER kvm
 
 ## 🚀 Installation
 
+### Easy Installation (Recommended)
+
+This method downloads the script and installs it for you. Just paste this command into your terminal:
+
+```bash
+sudo curl -L https://raw.githubusercontent.com/halmousama/vmm/main/vmm-bin -o /usr/local/bin/vmm && sudo chmod +x /usr/local/bin/vmm
+```
+
+### Manual Installation
+
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/halmousama/vmm.git
